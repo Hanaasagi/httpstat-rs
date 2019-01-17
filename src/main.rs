@@ -1,18 +1,22 @@
 #[macro_use]
 extern crate log;
+extern crate chrono;
 use std::env;
 use std::process::exit;
 
-macro_rules! env_or_default {
-    (
-        $name:expr ,$default:expr
-    ) => {
-        match env::var($name) {
-            Ok(ref val) if !val.is_empty() => val.to_lowercase(),
-            _ => $default.to_lowercase()
-        }
-    }
-}
+mod logging;
+use logging::{init_logger};
+
+//macro_rules! env_or_default {
+    //(
+        //$name:expr ,$default:expr
+    //) => {
+        //match env::var($name) {
+            //Ok(ref val) if !val.is_empty() => val.to_lowercase(),
+            //_ => $default.to_lowercase()
+        //}
+    //}
+//}
 
 static HELP: &'static str = r#"
 Usage: httpstat URL [CURL_OPTIONS]
@@ -73,9 +77,13 @@ fn main() {
     if is_debug {
         log_level = log::Level::Debug;
     }
-    log::set_max_level(
-        log_level.to_level_filter()
-    );
+    init_logger(log_level)
+        .unwrap_or_else(
+            |e| {
+                println!("init logger failed: {}", e);
+                exit(1)
+            }
+        );
 
-    debug!("httpstat debug mode");
+    debug!("httpstat debug mode enabled");
 }
