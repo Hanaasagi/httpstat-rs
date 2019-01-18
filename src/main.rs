@@ -2,8 +2,10 @@
 extern crate log;
 extern crate chrono;
 extern crate tempfile;
+extern crate serde_json;
 
 use tempfile::NamedTempFile;
+use serde_json::Value;
 use std::env;
 use std::process::exit;
 use std::process::Command;
@@ -53,6 +55,7 @@ Environments:
 
 
 static curl_format: &'static str = r#"
+{
     "time_namelookup": %{time_namelookup},
     "time_connect": %{time_connect},
     "time_appconnect": %{time_appconnect},
@@ -67,6 +70,66 @@ static curl_format: &'static str = r#"
     "local_ip": "%{local_ip}",
     "local_port": "%{local_port}"
 }"#;
+
+struct HTTPMetrics {
+    time_namelookup: f64,
+    time_connect: f64,
+    time_appconnect: f64,
+    time_pretransfer: f64,
+    time_redirect: f64,
+    time_starttransfer: f64,
+    time_total: f64,
+    range_dns: f64,
+    range_connection: f64,
+    range_ssl: f64,
+    range_server: f64,
+    range_transfer: f64,
+    speed_download: f64,
+    speed_upload: f64,
+    remote_ip: String,
+    remote_port: String,
+    local_ip: String,
+    local_port: String
+}
+
+impl HTTPMetrics {
+    fn new(
+        time_namelookup: f64,
+        time_connect: f64,
+        time_appconnect: f64,
+        time_pretransfer: f64,
+        time_redirect: f64,
+        time_starttransfer: f64,
+        time_total: f64,
+        speed_download: f64,
+        speed_upload: f64,
+        remote_ip: String,
+        remote_port: String,
+        local_ip: String,
+        local_port: String
+    ) -> Self {
+        Self {
+            time_namelookup: time_namelookup * 1000_f64,
+            time_connect: time_connect * 1000_f64,
+            time_appconnect: time_appconnect * 1000_f64,
+            time_pretransfer: time_pretransfer * 1000_f64,
+            time_redirect: time_redirect * 1000_f64,
+            time_starttransfer: time_starttransfer * 1000_f64,
+            time_total: time_total * 1000_f64,
+            speed_download: speed_download,
+            speed_upload: speed_upload,
+            range_dns: time_namelookup * 1000_f64,
+            range_connection: (time_connect - time_namelookup) * 1000_f64,
+            range_ssl: (time_pretransfer - time_connect) * 1000_f64,
+            range_server: (time_starttransfer - time_pretransfer) * 1000_f64,
+            range_transfer: (time_total - time_starttransfer) * 1000_f64,
+            remote_ip: remote_ip,
+            remote_port: remote_port,
+            local_ip: local_ip,
+            local_port: local_port
+        }
+    }
+}
 
 
 fn print_help() {
@@ -207,5 +270,32 @@ fn main() {
         .expect("invalid UTF-8");
 
     debug!("stdout: {}", stdout);
-    debug!("stderr: {}", stderr);
+
+    // optimize needed
+    if output.status.success() {
+        if stderr.is_empty() {
+            println!("{stderr}", stderr=stderr);
+        }
+    } else {
+        println!("curl exited with {status}: {stderr}", status=output.status, stderr=stderr);
+        exit(1);
+    }
+
+    let mut v: Value = serde_json::from_str(&stdout).expect("invalid json");
+    let metrics = HTTPMetrics::new(
+        v["time_namelookup"].as_f64().unwrap(),
+        v["time_connect"].as_f64().unwrap(),
+        v["time_appconnect"].as_f64().unwrap(),
+        v["time_pretransfer"].as_f64().unwrap(),
+        v["time_redirect"].as_f64().unwrap(),
+        v["time_starttransfer"].as_f64().unwrap(),
+        v[ "time_total" ].as_f64().unwrap(),
+        v[ "speed_download" ].as_f64().unwrap(),
+        v[ "speed_upload" ].as_f64().unwrap(),
+        v[ "remote_ip" ].as_str().unwrap().into(),
+        v[ "remote_port" ].as_str().unwrap().into(),
+        v[ "local_ip" ].as_str().unwrap().into(),
+        v["local_port"].as_str().unwrap().into()
+    );
+
 }
