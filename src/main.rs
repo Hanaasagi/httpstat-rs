@@ -16,18 +16,7 @@ use std::collections::HashMap;
 mod logging;
 use logging::{init_logger};
 
-//macro_rules! env_or_default {
-    //(
-        //$name:expr ,$default:expr
-    //) => {
-        //match env::var($name) {
-            //Ok(ref val) if !val.is_empty() => val.to_lowercase(),
-            //_ => $default.to_lowercase()
-        //}
-    //}
-//}
-
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BODY_DISPLAY_LIMIT: u16 = 1024;
 
 static HELP: &'static str = r#"
@@ -106,7 +95,7 @@ fn print_stat(metrics: &HTTPMetrics, is_https: bool) {
 
 
 
-static curl_format: &'static str = r#"
+static CURL_DUMP_FORMART: &'static str = r#"
 {
     "time_namelookup": %{time_namelookup},
     "time_connect": %{time_connect},
@@ -123,6 +112,7 @@ static curl_format: &'static str = r#"
     "local_port": "%{local_port}"
 }"#;
 
+#[allow(dead_code)]
 struct HTTPMetrics<'a> {
     time_namelookup: f64,
     time_connect: f64,
@@ -145,6 +135,7 @@ struct HTTPMetrics<'a> {
 }
 
 impl<'a> HTTPMetrics<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         time_namelookup: f64,
         time_connect: f64,
@@ -168,17 +159,17 @@ impl<'a> HTTPMetrics<'a> {
             time_redirect: time_redirect * 1000_f64,
             time_starttransfer: time_starttransfer * 1000_f64,
             time_total: time_total * 1000_f64,
-            speed_download: speed_download,
-            speed_upload: speed_upload,
+            speed_download,
+            speed_upload,
             range_dns: time_namelookup * 1000_f64,
             range_connection: (time_connect - time_namelookup) * 1000_f64,
             range_ssl: (time_pretransfer - time_connect) * 1000_f64,
             range_server: (time_starttransfer - time_pretransfer) * 1000_f64,
             range_transfer: (time_total - time_starttransfer) * 1000_f64,
-            remote_ip: remote_ip,
-            remote_port: remote_port,
-            local_ip: local_ip,
-            local_port: local_port
+            remote_ip,
+            remote_port,
+            local_ip,
+            local_port
         }
     }
 }
@@ -212,10 +203,12 @@ fn main() {
     let is_debug = option_env!("HTTPSTAT_DEBUG")
         .and_then(|v| v.to_lowercase().parse::<bool>().ok())
         .unwrap_or(false);
-    let mut log_level = log::Level::Info;
-    if is_debug {
-        log_level = log::Level::Debug;
-    }
+    let log_level = if is_debug {
+        log::Level::Debug
+    } else {
+        log::Level::Info
+    };
+
     init_logger(log_level)
         .unwrap_or_else(
             |e| {
@@ -285,12 +278,12 @@ fn main() {
         );
 
     let mut cmd_env = env::vars().collect::<HashMap<String, String>>();
-    cmd_env.entry("LC_ALL".into()).or_insert("C".into());
+    cmd_env.entry("LC_ALL".into()).or_insert_with(|| "C".into());
 
-    let mut cmd_core = vec![
+    let cmd_core = vec![
         //curl_bin,
         "-w",
-        curl_format,
+        CURL_DUMP_FORMART,
         "-D",
         headerf.path().to_str().unwrap(),  // TODO
         "-o",
@@ -383,10 +376,9 @@ fn main() {
         } else {
             println!("{}", body);
         }
-    } else {
-        if save_body {
-            println!("Body stored in: {path}", path=bodyf.path().to_str().unwrap());
-        }
+    }
+    if !show_body && save_body{
+        println!("Body stored in: {path}", path=bodyf.path().to_str().unwrap());
     }
 
 
