@@ -4,6 +4,8 @@ extern crate chrono;
 extern crate tempfile;
 extern crate serde_json;
 
+
+use std::io::Read;
 use tempfile::NamedTempFile;
 use serde_json::Value;
 use std::env;
@@ -26,6 +28,7 @@ use logging::{init_logger};
 //}
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const BODY_DISPLAY_LIMIT: u16 = 1024;
 
 static HELP: &'static str = r#"
 Usage: httpstat URL [CURL_OPTIONS]
@@ -54,6 +57,55 @@ Environments:
 "#;
 
 
+fn print_stat(metrics: &HTTPMetrics, is_https: bool) {
+    if is_https {
+        println!(r#"
+  DNS Lookup   TCP Connection   TLS Handshake   Server Processing   Content Transfer
+[   {a0000}  |     {a0001}    |    {a0002}    |      {a0003}      |      {a0004}     ]
+             |                |               |                   |                  |
+    namelookup:{b0000}        |               |                   |                  |
+                        connect:{b0001}       |                   |                  |
+                                    pretransfer:{b0002}           |                  |
+                                                      starttransfer:{b0003}          |
+                                                                                 total:{b0004}
+
+            )
+"#,
+        a0000=format!("{:^7}", format!("{:.0}ms", metrics.range_dns)),
+        a0001=format!("{:^7}", format!("{:.0}ms", metrics.range_connection)),
+        a0002=format!("{:^7}", format!("{:.0}ms", metrics.range_ssl)),
+        a0003=format!("{:^7}", format!("{:.0}ms", metrics.range_server)),
+        a0004=format!("{:^7}", format!("{:.0}ms", metrics.range_transfer)),
+        b0000=format!("{:<7}", format!("{:.0}ms", metrics.time_namelookup)),
+        b0001=format!("{:<7}", format!("{:.0}ms", metrics.time_connect)),
+        b0002=format!("{:<7}", format!("{:.0}ms", metrics.time_pretransfer)),
+        b0003=format!("{:<7}", format!("{:.0}ms", metrics.time_starttransfer)),
+        b0004=format!("{:<7}", format!("{:.0}ms", metrics.time_total))
+        );
+    } else {
+        println!(r#"
+  DNS Lookup   TCP Connection   Server Processing   Content Transfer
+[   {a0000}  |     {a0001}    |      {a0003}      |      {a0004}     ]
+             |                |                   |                  |
+    namelookup:{b0000}        |                   |                  |
+                        connect:{b0001}           |                  |
+                                      starttransfer:{b0003}          |
+                                                                 total:{b0004}
+"#,
+        a0000=format!("{:^7}", format!("{:.0}ms", metrics.range_dns)),
+        a0001=format!("{:^7}", format!("{:.0}ms", metrics.range_connection)),
+        a0003=format!("{:^7}", format!("{:.0}ms", metrics.range_server)),
+        a0004=format!("{:^7}", format!("{:.0}ms", metrics.range_transfer)),
+        b0000=format!("{:<7}", format!("{:.0}ms", metrics.time_namelookup)),
+        b0001=format!("{:<7}", format!("{:.0}ms", metrics.time_connect)),
+        b0003=format!("{:<7}", format!("{:.0}ms", metrics.time_starttransfer)),
+        b0004=format!("{:<7}", format!("{:.0}ms", metrics.time_total))
+        );
+    }
+}
+
+
+
 static curl_format: &'static str = r#"
 {
     "time_namelookup": %{time_namelookup},
@@ -71,7 +123,7 @@ static curl_format: &'static str = r#"
     "local_port": "%{local_port}"
 }"#;
 
-struct HTTPMetrics {
+struct HTTPMetrics<'a> {
     time_namelookup: f64,
     time_connect: f64,
     time_appconnect: f64,
@@ -86,13 +138,13 @@ struct HTTPMetrics {
     range_transfer: f64,
     speed_download: f64,
     speed_upload: f64,
-    remote_ip: String,
-    remote_port: String,
-    local_ip: String,
-    local_port: String
+    remote_ip: &'a str,
+    remote_port: &'a str,
+    local_ip: &'a str,
+    local_port: &'a str
 }
 
-impl HTTPMetrics {
+impl<'a> HTTPMetrics<'a> {
     fn new(
         time_namelookup: f64,
         time_connect: f64,
@@ -103,10 +155,10 @@ impl HTTPMetrics {
         time_total: f64,
         speed_download: f64,
         speed_upload: f64,
-        remote_ip: String,
-        remote_port: String,
-        local_ip: String,
-        local_port: String
+        remote_ip: &'a str,
+        remote_port: &'a str,
+        local_ip: &'a str,
+        local_port: &'a str
     ) -> Self {
         Self {
             time_namelookup: time_namelookup * 1000_f64,
@@ -216,7 +268,7 @@ fn main() {
     }
 
 
-    let headerf = NamedTempFile::new()
+    let mut headerf = NamedTempFile::new()
         .unwrap_or_else(
             |e| {
                 println!("create tempfile failed: {}", e);
@@ -224,7 +276,7 @@ fn main() {
             }
         );
 
-    let bodyf = NamedTempFile::new()
+    let mut bodyf = NamedTempFile::new()
         .unwrap_or_else(
             |e| {
                 println!("create tempfile failed: {}", e);
@@ -281,7 +333,7 @@ fn main() {
         exit(1);
     }
 
-    let mut v: Value = serde_json::from_str(&stdout).expect("invalid json");
+    let v: Value = serde_json::from_str(&stdout).expect("invalid json");
     let metrics = HTTPMetrics::new(
         v["time_namelookup"].as_f64().unwrap(),
         v["time_connect"].as_f64().unwrap(),
@@ -289,13 +341,71 @@ fn main() {
         v["time_pretransfer"].as_f64().unwrap(),
         v["time_redirect"].as_f64().unwrap(),
         v["time_starttransfer"].as_f64().unwrap(),
-        v[ "time_total" ].as_f64().unwrap(),
-        v[ "speed_download" ].as_f64().unwrap(),
-        v[ "speed_upload" ].as_f64().unwrap(),
-        v[ "remote_ip" ].as_str().unwrap().into(),
-        v[ "remote_port" ].as_str().unwrap().into(),
-        v[ "local_ip" ].as_str().unwrap().into(),
-        v["local_port"].as_str().unwrap().into()
+        v["time_total"].as_f64().unwrap(),
+        v["speed_download"].as_f64().unwrap(),
+        v["speed_upload"].as_f64().unwrap(),
+        v["remote_ip"].as_str().unwrap(),
+        v["remote_port"].as_str().unwrap(),
+        v["local_ip"].as_str().unwrap(),
+        v["local_port"].as_str().unwrap()
     );
 
+    if show_ip {
+        println!(
+            "Connected to {remote_ip}:{remote_port} from {local_ip}:{local_port}",
+            remote_ip=metrics.remote_ip,
+            remote_port=metrics.remote_port,
+            local_ip=metrics.local_ip,
+            local_port=metrics.local_port
+        )
+    }
+
+    // handle header and body
+    let mut header = String::new();
+    headerf.read_to_string(&mut header).unwrap();
+    headerf.close().unwrap();  // remove automaticlly
+    println!("{}", header);  // TODO colorful
+
+
+    if show_body {
+        let mut body = String::new();
+        bodyf.read_to_string(&mut body).unwrap();
+        let body_len = body.len();
+
+        if body_len > BODY_DISPLAY_LIMIT as usize {
+            println!("{body}...", body=&body[..BODY_DISPLAY_LIMIT as usize]);
+            let mut prompt = format!("Body is truncated ({limit} out of {len})", limit=BODY_DISPLAY_LIMIT, len=body_len);
+
+            if save_body {
+                prompt = format!("{pre}, stored in: {path}", pre=prompt, path=bodyf.path().to_str().unwrap());
+            }
+            println!("{}", prompt);
+        } else {
+            println!("{}", body);
+        }
+    } else {
+        if save_body {
+            println!("Body stored in: {path}", path=bodyf.path().to_str().unwrap());
+        }
+    }
+
+
+    if save_body {
+        bodyf.into_temp_path();
+    } else {
+        bodyf.close().unwrap();
+    }
+
+    if url.starts_with("https://") {
+        print_stat(&metrics, true);
+    } else {
+        print_stat(&metrics, false);
+    }
+
+    if show_speed {
+        println!("download spped: {:.2} KiB/s, upload speed: {:.2}",
+                 metrics.speed_download / 1024_f64,
+                 metrics.speed_upload / 1024_f64
+            );
+    }
 }
