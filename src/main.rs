@@ -16,6 +16,9 @@ use std::collections::HashMap;
 mod logging;
 use logging::{init_logger};
 
+mod metrics;
+use metrics::HTTPMetrics;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BODY_DISPLAY_LIMIT: u16 = 1024;
 
@@ -46,55 +49,6 @@ Environments:
 "#;
 
 
-fn print_stat(metrics: &HTTPMetrics, is_https: bool) {
-    if is_https {
-        println!(r#"
-  DNS Lookup   TCP Connection   TLS Handshake   Server Processing   Content Transfer
-[   {a0000}  |     {a0001}    |    {a0002}    |      {a0003}      |      {a0004}     ]
-             |                |               |                   |                  |
-    namelookup:{b0000}        |               |                   |                  |
-                        connect:{b0001}       |                   |                  |
-                                    pretransfer:{b0002}           |                  |
-                                                      starttransfer:{b0003}          |
-                                                                                 total:{b0004}
-
-            )
-"#,
-        a0000=format!("{:^7}", format!("{:.0}ms", metrics.range_dns)),
-        a0001=format!("{:^7}", format!("{:.0}ms", metrics.range_connection)),
-        a0002=format!("{:^7}", format!("{:.0}ms", metrics.range_ssl)),
-        a0003=format!("{:^7}", format!("{:.0}ms", metrics.range_server)),
-        a0004=format!("{:^7}", format!("{:.0}ms", metrics.range_transfer)),
-        b0000=format!("{:<7}", format!("{:.0}ms", metrics.time_namelookup)),
-        b0001=format!("{:<7}", format!("{:.0}ms", metrics.time_connect)),
-        b0002=format!("{:<7}", format!("{:.0}ms", metrics.time_pretransfer)),
-        b0003=format!("{:<7}", format!("{:.0}ms", metrics.time_starttransfer)),
-        b0004=format!("{:<7}", format!("{:.0}ms", metrics.time_total))
-        );
-    } else {
-        println!(r#"
-  DNS Lookup   TCP Connection   Server Processing   Content Transfer
-[   {a0000}  |     {a0001}    |      {a0003}      |      {a0004}     ]
-             |                |                   |                  |
-    namelookup:{b0000}        |                   |                  |
-                        connect:{b0001}           |                  |
-                                      starttransfer:{b0003}          |
-                                                                 total:{b0004}
-"#,
-        a0000=format!("{:^7}", format!("{:.0}ms", metrics.range_dns)),
-        a0001=format!("{:^7}", format!("{:.0}ms", metrics.range_connection)),
-        a0003=format!("{:^7}", format!("{:.0}ms", metrics.range_server)),
-        a0004=format!("{:^7}", format!("{:.0}ms", metrics.range_transfer)),
-        b0000=format!("{:<7}", format!("{:.0}ms", metrics.time_namelookup)),
-        b0001=format!("{:<7}", format!("{:.0}ms", metrics.time_connect)),
-        b0003=format!("{:<7}", format!("{:.0}ms", metrics.time_starttransfer)),
-        b0004=format!("{:<7}", format!("{:.0}ms", metrics.time_total))
-        );
-    }
-}
-
-
-
 static CURL_DUMP_FORMART: &'static str = r#"
 {
     "time_namelookup": %{time_namelookup},
@@ -111,69 +65,6 @@ static CURL_DUMP_FORMART: &'static str = r#"
     "local_ip": "%{local_ip}",
     "local_port": "%{local_port}"
 }"#;
-
-#[allow(dead_code)]
-struct HTTPMetrics<'a> {
-    time_namelookup: f64,
-    time_connect: f64,
-    time_appconnect: f64,
-    time_pretransfer: f64,
-    time_redirect: f64,
-    time_starttransfer: f64,
-    time_total: f64,
-    range_dns: f64,
-    range_connection: f64,
-    range_ssl: f64,
-    range_server: f64,
-    range_transfer: f64,
-    speed_download: f64,
-    speed_upload: f64,
-    remote_ip: &'a str,
-    remote_port: &'a str,
-    local_ip: &'a str,
-    local_port: &'a str
-}
-
-impl<'a> HTTPMetrics<'a> {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        time_namelookup: f64,
-        time_connect: f64,
-        time_appconnect: f64,
-        time_pretransfer: f64,
-        time_redirect: f64,
-        time_starttransfer: f64,
-        time_total: f64,
-        speed_download: f64,
-        speed_upload: f64,
-        remote_ip: &'a str,
-        remote_port: &'a str,
-        local_ip: &'a str,
-        local_port: &'a str
-    ) -> Self {
-        Self {
-            time_namelookup: time_namelookup * 1000_f64,
-            time_connect: time_connect * 1000_f64,
-            time_appconnect: time_appconnect * 1000_f64,
-            time_pretransfer: time_pretransfer * 1000_f64,
-            time_redirect: time_redirect * 1000_f64,
-            time_starttransfer: time_starttransfer * 1000_f64,
-            time_total: time_total * 1000_f64,
-            speed_download,
-            speed_upload,
-            range_dns: time_namelookup * 1000_f64,
-            range_connection: (time_connect - time_namelookup) * 1000_f64,
-            range_ssl: (time_pretransfer - time_connect) * 1000_f64,
-            range_server: (time_starttransfer - time_pretransfer) * 1000_f64,
-            range_transfer: (time_total - time_starttransfer) * 1000_f64,
-            remote_ip,
-            remote_port,
-            local_ip,
-            local_port
-        }
-    }
-}
-
 
 fn print_help() {
     println!("{}", HELP);
@@ -389,9 +280,9 @@ fn main() {
     }
 
     if url.starts_with("https://") {
-        print_stat(&metrics, true);
+        metrics.print_stat(true);
     } else {
-        print_stat(&metrics, false);
+        metrics.print_stat(false);
     }
 
     if show_speed {
